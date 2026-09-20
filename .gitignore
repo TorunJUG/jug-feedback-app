@@ -1,0 +1,30 @@
+# Flutter/Dart generated files
+.dart_tool/
+.flutter/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+build/
+coverage/
+
+# Local platform build configuration and artifacts
+android/local.properties
+android/.gradle/
+android/app/build/
+ios/Pods/
+ios/Flutter/ephemeral/
+ios/Flutter/Generated.xcconfig
+ios/Flutter/flutter_export_environment.sh
+ios/Runner/GeneratedPluginRegistrant.*
+
+# IDE files
+.idea/
+*.iml
+.vscode/
+
+# macOS files
+.DS_Store
+
+# Local tool profiles and generated IDE metadata
+.dart_tool/chrome-device/

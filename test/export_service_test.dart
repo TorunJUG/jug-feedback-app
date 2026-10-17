@@ -7,7 +7,7 @@ void main() {
       id: 'event-1',
       title: 'JUG',
       date: '2026-01-01',
-      pin: '1234',
+      password: 'kochamjug',
       presentations: const [
         Presentation(id: 'p1', title: 'Talk, one', speaker: 'Speaker "A"'),
       ],
@@ -33,7 +33,7 @@ void main() {
       id: 'event-1',
       title: 'Feedback App',
       date: '2026-01-01',
-      pin: '1234',
+      password: 'kochamjug',
       presentations: ratings
           .map(
             (rating) => Presentation(
@@ -57,12 +57,12 @@ void main() {
     }
   });
 
-  test('exports ratings even when presentation was removed later', () {
+  test('omits ratings for presentations that are no longer configured', () {
     final config = EventConfig(
       id: 'event-1',
       title: 'Feedback App',
       date: '2026-01-01',
-      pin: '1234',
+      password: 'kochamjug',
       presentations: const [],
     );
     final round = FeedbackRound(
@@ -73,9 +73,8 @@ void main() {
 
     final rows = ExportService.csvRows(config, [round]);
 
-    expect(rows, hasLength(2));
-    expect(rows.last, contains('"removed-presentation"'));
-    expect(rows.last, contains('"super"'));
+    expect(rows, hasLength(1));
+    expect(rows.single, contains('presentationId'));
   });
 
   test('keeps CSV titles and speaker names for current talks', () {
@@ -83,7 +82,7 @@ void main() {
       id: 'event-1',
       title: 'Feedback App',
       date: '2026-01-01',
-      pin: '1234',
+      password: 'kochamjug',
       presentations: const [
         Presentation(id: 'p1', title: 'Talk one', speaker: 'Speaker one'),
       ],

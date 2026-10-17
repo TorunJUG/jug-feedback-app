@@ -75,13 +75,13 @@ class EventConfig {
     required this.id,
     required this.title,
     required this.date,
-    required this.pin,
+    required this.password,
     required this.presentations,
   });
   final String id;
   final String title;
   final String date;
-  final String pin;
+  final String password;
   final List<Presentation> presentations;
 
   factory EventConfig.fromJson(Map<String, dynamic> json) {
@@ -103,7 +103,7 @@ class EventConfig {
       id: (json['event'] as Map<String, dynamic>)['id'] as String,
       title: (json['event'] as Map<String, dynamic>)['title'] as String,
       date: (json['event'] as Map<String, dynamic>)['date'] as String,
-      pin: (json['admin'] as Map<String, dynamic>)['pin'] as String,
+      password: (json['admin'] as Map<String, dynamic>)['password'] as String,
       presentations: presentations,
     );
   }
@@ -153,6 +153,7 @@ abstract interface class FeedbackRepository {
   Future<List<FeedbackRound>> loadRounds();
   Future<void> saveRound(FeedbackRound round);
   Future<void> clearRatingsForPresentation(String presentationId);
+  Future<void> retainRatingsForPresentations(Set<String> presentationIds);
   Future<List<Presentation>?> loadPresentations();
   Future<void> savePresentations(List<Presentation> presentations);
   Future<List<String>?> loadActivePresentationIds();
@@ -187,12 +188,28 @@ class LocalRepository implements FeedbackRepository {
 
   @override
   Future<void> clearRatingsForPresentation(String presentationId) async {
+    await _filterStoredRatings((id) => id != presentationId);
+  }
+
+  @override
+  Future<void> retainRatingsForPresentations(
+    Set<String> presentationIds,
+  ) async {
+    await _filterStoredRatings(
+      (presentationId) => presentationIds.contains(presentationId),
+    );
+  }
+
+  Future<void> _filterStoredRatings(
+    bool Function(String presentationId) keep,
+  ) async {
     final rounds = await loadRounds();
     final preferences = await SharedPreferences.getInstance();
     final filtered = rounds
         .map((round) {
-          final ratings = Map<String, Rating>.from(round.ratings)
-            ..remove(presentationId);
+          final ratings = Map<String, Rating>.fromEntries(
+            round.ratings.entries.where((entry) => keep(entry.key)),
+          );
           return FeedbackRound(
             id: round.id,
             createdAt: round.createdAt,
@@ -261,12 +278,13 @@ class ExportService {
     for (final round in rounds) {
       for (final entry in round.ratings.entries) {
         final presentation = presentationsById[entry.key];
+        if (presentation == null) continue;
         rows.add([
           round.id,
           round.createdAt.toIso8601String(),
-          entry.key,
-          presentation?.title ?? entry.key,
-          presentation?.speaker ?? '',
+          presentation.id,
+          presentation.title,
+          presentation.speaker,
           entry.value.code,
         ]);
       }
@@ -382,14 +400,17 @@ class _FeedbackHomeState extends State<FeedbackHome> {
             jsonDecode(await rootBundle.loadString('assets/config/event.json'))
                 as Map<String, dynamic>,
           );
-      final rounds = await _repository.loadRounds();
       final presentations =
           await _repository.loadPresentations() ?? config.presentations;
+      await _repository.retainRatingsForPresentations(
+        presentations.map((presentation) => presentation.id).toSet(),
+      );
+      final cleanedRounds = await _repository.loadRounds();
       final activeIds = await _repository.loadActivePresentationIds() ?? [];
       if (mounted) {
         setState(() {
           _config = config;
-          _rounds = rounds;
+          _rounds = cleanedRounds;
           _presentations = presentations;
           _activePresentationIds = activeIds;
           _loading = false;
@@ -445,7 +466,7 @@ class _FeedbackHomeState extends State<FeedbackHome> {
       _rounds = [..._rounds, round];
       _draft = {};
       _savingRound = false;
-      _countdown = 5;
+      _countdown = 3;
     });
     _countdownTimer?.cancel();
     _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
@@ -463,14 +484,14 @@ class _FeedbackHomeState extends State<FeedbackHome> {
   }
 
   Future<void> _openAdmin() async {
-    final pin = await _askPin();
-    if (pin == _config?.pin && mounted) {
+    final password = await _askForAdminPassword();
+    if (password == _config?.password && mounted) {
       setState(() {
         _admin = true;
       });
-    } else if (pin != null && mounted) {
+    } else if (password != null && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Nieprawidłowy PIN. Spróbuj ponownie.')),
+        const SnackBar(content: Text('Nieprawidłowe hasło. Spróbuj ponownie.')),
       );
     }
   }
@@ -541,10 +562,10 @@ class _FeedbackHomeState extends State<FeedbackHome> {
     });
   }
 
-  Future<String?> _askPin() async {
+  Future<String?> _askForAdminPassword() async {
     return showDialog<String>(
       context: context,
-      builder: (_) => const _AdminPinDialog(),
+      builder: (_) => const _AdminPasswordDialog(),
     );
   }
 
@@ -610,7 +631,15 @@ class _FeedbackHomeState extends State<FeedbackHome> {
         onAutoSave: _savePresentationsAutomatically,
         onDelete: _deletePresentation,
         onNewVoting: _startNewVoting,
-        onCsv: _rounds.isEmpty
+        onShowResults: () => Navigator.of(context).push(
+          MaterialPageRoute<void>(
+            builder: (_) => RatingResultsPage(
+              presentations: _presentations,
+              rounds: _rounds,
+            ),
+          ),
+        ),
+        onCsv: _presentations.isEmpty || _rounds.isEmpty
             ? null
             : () async {
                 final messenger = ScaffoldMessenger.of(context);
@@ -621,7 +650,7 @@ class _FeedbackHomeState extends State<FeedbackHome> {
                       id: _config!.id,
                       title: _config!.title,
                       date: _config!.date,
-                      pin: _config!.pin,
+                      password: _config!.password,
                       presentations: _presentations,
                     ),
                     _rounds,
@@ -1436,6 +1465,7 @@ class _AdminScreen extends StatelessWidget {
     required this.onAutoSave,
     required this.onDelete,
     required this.onNewVoting,
+    required this.onShowResults,
     required this.onCsv,
   });
   final List<FeedbackRound> rounds;
@@ -1446,6 +1476,7 @@ class _AdminScreen extends StatelessWidget {
   final Future<void> Function(String id, List<Presentation> presentations)
   onDelete;
   final Future<void> Function(List<String> ids) onNewVoting;
+  final VoidCallback onShowResults;
   final VoidCallback? onCsv;
   @override
   Widget build(BuildContext context) {
@@ -1470,18 +1501,9 @@ class _AdminScreen extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
-                    Row(
-                      crossAxisAlignment: CrossAxisAlignment.center,
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        const Text(
-                          'Panel organizatora',
-                          style: TextStyle(
-                            fontSize: 30,
-                            fontWeight: FontWeight.w800,
-                          ),
-                        ),
-                        SizedBox(
+                    LayoutBuilder(
+                      builder: (context, constraints) {
+                        final backButton = SizedBox(
                           height: 48,
                           child: OutlinedButton(
                             onPressed: onBack,
@@ -1489,12 +1511,54 @@ class _AdminScreen extends StatelessWidget {
                               padding: const EdgeInsets.symmetric(
                                 horizontal: 24,
                               ),
+                              foregroundColor: const Color(0xff0b6f5d),
+                              side: const BorderSide(
+                                color: Color(0xff0b6f5d),
+                                width: 1.5,
+                              ),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              minimumSize: const Size(48, 48),
                               textStyle: const TextStyle(fontSize: 16),
                             ),
                             child: const Text('Wróć'),
                           ),
-                        ),
-                      ],
+                        );
+                        if (constraints.maxWidth < 850) {
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              const Text(
+                                'Panel organizatora',
+                                style: TextStyle(
+                                  fontSize: 30,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              Align(
+                                alignment: Alignment.centerRight,
+                                child: backButton,
+                              ),
+                            ],
+                          );
+                        }
+                        return Row(
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            const Text(
+                              'Panel organizatora',
+                              style: TextStyle(
+                                fontSize: 30,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                            backButton,
+                          ],
+                        );
+                      },
                     ),
                     const SizedBox(height: 24),
                     AdminPresentationPanel(
@@ -1504,6 +1568,7 @@ class _AdminScreen extends StatelessWidget {
                       onAutoSave: onAutoSave,
                       onDelete: onDelete,
                       onNewVoting: onNewVoting,
+                      onShowResults: onShowResults,
                       onCsv: onCsv,
                     ),
                   ],
@@ -1517,6 +1582,212 @@ class _AdminScreen extends StatelessWidget {
   }
 }
 
+class RatingResultsPage extends StatelessWidget {
+  const RatingResultsPage({
+    super.key,
+    required this.presentations,
+    required this.rounds,
+  });
+
+  final List<Presentation> presentations;
+  final List<FeedbackRound> rounds;
+
+  static Map<String, Map<Rating, int>> aggregateRatings(
+    List<Presentation> presentations,
+    List<FeedbackRound> rounds,
+  ) {
+    final counts = {
+      for (final presentation in presentations)
+        presentation.id: {for (final rating in Rating.values) rating: 0},
+    };
+    for (final round in rounds) {
+      for (final entry in round.ratings.entries) {
+        final presentationCounts = counts[entry.key];
+        if (presentationCounts != null) {
+          presentationCounts[entry.value] =
+              presentationCounts[entry.value]! + 1;
+        }
+      }
+    }
+    return counts;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final counts = aggregateRatings(presentations, rounds);
+    final wide = MediaQuery.sizeOf(context).width >= 900;
+    return Scaffold(
+      appBar: AppBar(title: const Text('Wyniki')),
+      body: SafeArea(
+        child: presentations.isEmpty
+            ? const Center(child: Text('Brak prezentacji do wyświetlenia.'))
+            : LayoutBuilder(
+                builder: (context, constraints) => Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 1100),
+                    child: ListView.separated(
+                      key: const ValueKey('rating-results-list'),
+                      padding: const EdgeInsets.all(16),
+                      itemCount: presentations.length + (wide ? 1 : 0),
+                      separatorBuilder: (_, _) => const SizedBox(height: 8),
+                      itemBuilder: (context, index) {
+                        if (wide && index == 0) {
+                          return const _ResultsRatingHeader();
+                        }
+                        final presentation =
+                            presentations[index - (wide ? 1 : 0)];
+                        final presentationCounts = counts[presentation.id]!;
+                        if (wide) {
+                          return _WideRatingResultRow(
+                            presentation: presentation,
+                            counts: presentationCounts,
+                          );
+                        }
+                        return _CompactRatingResultCard(
+                          presentation: presentation,
+                          counts: presentationCounts,
+                        );
+                      },
+                    ),
+                  ),
+                ),
+              ),
+      ),
+    );
+  }
+}
+
+class _ResultsRatingHeader extends StatelessWidget {
+  const _ResultsRatingHeader();
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          children: [
+            const Expanded(
+              flex: 36,
+              child: Text(
+                'Prezentacja',
+                style: TextStyle(fontWeight: FontWeight.w800),
+              ),
+            ),
+            for (final rating in Rating.values)
+              Expanded(
+                flex: 16,
+                child: Column(
+                  key: ValueKey('results-header-${rating.code}'),
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(rating.label, style: const TextStyle(fontSize: 20)),
+                    Text(
+                      rating.semanticLabel,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(fontWeight: FontWeight.w800),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _WideRatingResultRow extends StatelessWidget {
+  const _WideRatingResultRow({
+    required this.presentation,
+    required this.counts,
+  });
+  final Presentation presentation;
+  final Map<Rating, int> counts;
+
+  @override
+  Widget build(BuildContext context) => Card(
+    margin: EdgeInsets.zero,
+    child: Padding(
+      padding: const EdgeInsets.all(16),
+      child: Row(
+        children: [
+          Expanded(
+            flex: 36,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  presentation.title,
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+                Text(
+                  presentation.speaker,
+                  style: const TextStyle(color: Color(0xff64736d)),
+                ),
+              ],
+            ),
+          ),
+          for (final rating in Rating.values)
+            Expanded(
+              flex: 16,
+              child: Text(
+                '${counts[rating] ?? 0}',
+                key: ValueKey('result-${presentation.id}-${rating.code}'),
+                textAlign: TextAlign.center,
+              ),
+            ),
+        ],
+      ),
+    ),
+  );
+}
+
+class _CompactRatingResultCard extends StatelessWidget {
+  const _CompactRatingResultCard({
+    required this.presentation,
+    required this.counts,
+  });
+  final Presentation presentation;
+  final Map<Rating, int> counts;
+
+  @override
+  Widget build(BuildContext context) => Card(
+    child: Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            presentation.title,
+            style: const TextStyle(fontWeight: FontWeight.w700),
+          ),
+          Text(
+            presentation.speaker,
+            style: const TextStyle(color: Color(0xff64736d)),
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final rating in Rating.values)
+                Chip(
+                  key: ValueKey('result-${presentation.id}-${rating.code}'),
+                  avatar: Text(rating.label),
+                  label: Text(
+                    '${rating.semanticLabel}: ${counts[rating] ?? 0}',
+                  ),
+                ),
+            ],
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
 class AdminPresentationPanel extends StatefulWidget {
   const AdminPresentationPanel({
     super.key,
@@ -1525,6 +1796,7 @@ class AdminPresentationPanel extends StatefulWidget {
     required this.onAutoSave,
     required this.onDelete,
     required this.onNewVoting,
+    required this.onShowResults,
     required this.onCsv,
     required this.roundCount,
   });
@@ -1534,6 +1806,7 @@ class AdminPresentationPanel extends StatefulWidget {
   final Future<void> Function(String id, List<Presentation> presentations)
   onDelete;
   final Future<void> Function(List<String> ids) onNewVoting;
+  final VoidCallback onShowResults;
   final VoidCallback? onCsv;
   final int Function(String presentationId) roundCount;
   static const addPresentationKey = ValueKey('admin-add-presentation');
@@ -1652,6 +1925,17 @@ class _AdminPresentationPanelState extends State<AdminPresentationPanel> {
                     onPressed: () => _editPresentation(
                       existing: presentation,
                       index: entry.key,
+                    ),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: const Color(0xff0b6f5d),
+                      side: const BorderSide(
+                        color: Color(0xff0b6f5d),
+                        width: 1.5,
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      minimumSize: const Size(48, 48),
                     ),
                     child: const Text('Edytuj'),
                   ),
@@ -1864,58 +2148,106 @@ class _AdminPresentationPanelState extends State<AdminPresentationPanel> {
             },
           ),
           const SizedBox(height: 16),
-          LayoutBuilder(
-            builder: (context, constraints) {
-              const dividerWidth = 210.0;
-              return Row(
-                children: [
-                  const Expanded(
-                    child: Padding(
-                      padding: EdgeInsets.only(bottom: 8),
-                      child: Divider(color: Color(0xffb8d8cd), thickness: 1.5),
-                    ),
-                  ),
-                  const SizedBox(width: 24),
-                  SizedBox(
-                    width: dividerWidth,
-                    child: const Padding(
-                      padding: EdgeInsets.only(bottom: 8),
-                      child: Divider(color: Color(0xffb8d8cd), thickness: 1.5),
-                    ),
-                  ),
-                ],
-              );
-            },
+          const Divider(
+            key: ValueKey('admin-bottom-divider'),
+            color: Color(0xffb8d8cd),
+            thickness: 1.5,
+            height: 1,
           ),
           const SizedBox(height: 20),
           LayoutBuilder(
             builder: (context, constraints) {
               final narrow = constraints.maxWidth < 540;
+              final phoneLandscape =
+                  MediaQuery.sizeOf(context).width >
+                      MediaQuery.sizeOf(context).height &&
+                  constraints.maxWidth < 900;
+              final hasRatings = _presentations.any(
+                (presentation) => widget.roundCount(presentation.id) > 0,
+              );
+              final addButton = FilledButton.icon(
+                key: AdminPresentationPanel.addPresentationKey,
+                onPressed: _presentations.length >= 5
+                    ? null
+                    : () => _editPresentation(),
+                icon: const Icon(Icons.add),
+                label: const Text('Dodaj prezentację'),
+              );
+              final exportButton = OutlinedButton(
+                key: AdminPresentationPanel.exportCsvKey,
+                onPressed: _presentations.isEmpty ? null : widget.onCsv,
+                style: OutlinedButton.styleFrom(
+                  side: const BorderSide(color: Color(0xff0b6f5d), width: 1.5),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  minimumSize: const Size(48, 48),
+                  foregroundColor:
+                      _presentations.isEmpty || widget.onCsv == null
+                      ? const Color(0xff8a9690)
+                      : null,
+                ),
+                child: const Text(
+                  'Eksportuj wyniki do CSV',
+                  textAlign: TextAlign.center,
+                ),
+              );
+              final resultsButton = FilledButton.tonalIcon(
+                key: const ValueKey('show-results'),
+                onPressed: hasRatings ? widget.onShowResults : null,
+                icon: const Icon(Icons.bar_chart),
+                label: const Text('Pokaż wyniki'),
+              );
+
+              if (phoneLandscape) {
+                return Row(
+                  children: [
+                    for (final button in [
+                      addButton,
+                      exportButton,
+                      resultsButton,
+                    ])
+                      Expanded(
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 3),
+                          child: SizedBox(height: 56, child: button),
+                        ),
+                      ),
+                  ],
+                );
+              }
+
               return Align(
                 alignment: narrow ? Alignment.center : Alignment.centerRight,
-                child: Wrap(
-                  alignment: narrow ? WrapAlignment.center : WrapAlignment.end,
-                  spacing: 10,
-                  runSpacing: 10,
+                child: Column(
+                  crossAxisAlignment: narrow
+                      ? CrossAxisAlignment.stretch
+                      : CrossAxisAlignment.end,
                   children: [
-                    FilledButton.icon(
-                      key: AdminPresentationPanel.addPresentationKey,
-                      onPressed: _presentations.length >= 5
-                          ? null
-                          : () => _editPresentation(),
-                      icon: const Icon(Icons.add),
-                      label: const Text('Dodaj prezentację'),
-                    ),
-                    OutlinedButton(
-                      key: AdminPresentationPanel.exportCsvKey,
-                      onPressed: widget.onCsv,
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: widget.onCsv == null
-                            ? const Color(0xff8a9690)
-                            : null,
+                    if (narrow)
+                      SizedBox(height: 56, child: addButton)
+                    else
+                      Align(alignment: Alignment.centerRight, child: addButton),
+                    const SizedBox(height: 8),
+                    if (narrow) ...[
+                      SizedBox(height: 56, child: exportButton),
+                      const SizedBox(height: 8),
+                      SizedBox(height: 56, child: resultsButton),
+                    ] else
+                      SizedBox(
+                        width: 520,
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: SizedBox(height: 56, child: resultsButton),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: SizedBox(height: 56, child: exportButton),
+                            ),
+                          ],
+                        ),
                       ),
-                      child: const Text('Eksportuj wyniki do CSV'),
-                    ),
                   ],
                 ),
               );
@@ -2056,14 +2388,14 @@ class _PresentationEditorDialogState extends State<_PresentationEditorDialog> {
   }
 }
 
-class _AdminPinDialog extends StatefulWidget {
-  const _AdminPinDialog();
+class _AdminPasswordDialog extends StatefulWidget {
+  const _AdminPasswordDialog();
 
   @override
-  State<_AdminPinDialog> createState() => _AdminPinDialogState();
+  State<_AdminPasswordDialog> createState() => _AdminPasswordDialogState();
 }
 
-class _AdminPinDialogState extends State<_AdminPinDialog> {
+class _AdminPasswordDialogState extends State<_AdminPasswordDialog> {
   final _controller = TextEditingController();
 
   @override
@@ -2076,17 +2408,16 @@ class _AdminPinDialogState extends State<_AdminPinDialog> {
   Widget build(BuildContext context) => AlertDialog(
     title: const Text('Panel organizatora'),
     content: TextField(
-      key: const ValueKey('admin-pin-input'),
+      key: const ValueKey('admin-password-input'),
       controller: _controller,
       autofocus: true,
       obscureText: true,
-      keyboardType: TextInputType.number,
-      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-      maxLength: 8,
+      keyboardType: TextInputType.visiblePassword,
+      maxLength: 32,
       textInputAction: TextInputAction.done,
       onSubmitted: (value) => Navigator.pop(context, value),
       decoration: const InputDecoration(
-        labelText: 'PIN organizatora',
+        labelText: 'Hasło organizatora',
         border: OutlineInputBorder(),
       ),
     ),

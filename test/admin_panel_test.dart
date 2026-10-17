@@ -30,6 +30,7 @@ void main() {
                 onAutoSave: (_) async {},
                 onDelete: (_, _) async {},
                 onNewVoting: (ids) async => activeIds = ids,
+                onShowResults: () {},
                 onCsv: () {},
               ),
             ),
@@ -83,6 +84,7 @@ void main() {
               onAutoSave: (_) async {},
               onDelete: (_, _) async {},
               onNewVoting: (_) async {},
+              onShowResults: () {},
               onCsv: null,
             ),
           ),
@@ -96,6 +98,25 @@ void main() {
         find.byKey(const ValueKey('rating-count-p1')),
       );
       expect(badge.center.dx, closeTo(header.center.dx, 1));
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('organizer section divider is a single continuous line', (
+      tester,
+    ) async {
+      await tester.pumpWidget(_adminPanelApp());
+
+      expect(
+        find.byKey(const ValueKey('admin-bottom-divider')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: find.byType(AdminPresentationPanel),
+          matching: find.byType(Divider),
+        ),
+        findsNWidgets(3),
+      );
       expect(tester.takeException(), isNull);
     });
 
@@ -122,6 +143,7 @@ void main() {
               onAutoSave: (_) async {},
               onDelete: (_, _) async {},
               onNewVoting: (_) async {},
+              onShowResults: () {},
               onCsv: null,
             ),
           ),
@@ -143,6 +165,29 @@ void main() {
       expect(edit.center.dx, closeTo(delete.center.dx, 1));
       expect(newVoting.bottom, lessThanOrEqualTo(edit.top));
       expect(edit.bottom, lessThanOrEqualTo(delete.top));
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('management outlined buttons use explicit visible borders', (
+      tester,
+    ) async {
+      await tester.pumpWidget(_adminPanelApp());
+
+      final edit = tester.widget<OutlinedButton>(
+        find.widgetWithText(OutlinedButton, 'Edytuj'),
+      );
+      final editSide = edit.style!.side!.resolve({})!;
+      expect(editSide.color, const Color(0xff0b6f5d));
+      expect(editSide.width, 1.5);
+      expect(edit.style!.minimumSize!.resolve({}), const Size(48, 48));
+
+      final export = tester.widget<OutlinedButton>(
+        find.byKey(AdminPresentationPanel.exportCsvKey),
+      );
+      final exportSide = export.style!.side!.resolve({})!;
+      expect(exportSide.color, const Color(0xff0b6f5d));
+      expect(exportSide.width, 1.5);
+      expect(export.style!.minimumSize!.resolve({}), const Size(48, 48));
       expect(tester.takeException(), isNull);
     });
 
@@ -168,6 +213,7 @@ void main() {
                 onAutoSave: (_) async {},
                 onDelete: (_, _) async {},
                 onNewVoting: (_) async {},
+                onShowResults: () {},
                 onCsv: null,
               ),
             ),
@@ -205,6 +251,7 @@ void main() {
                 onAutoSave: (_) async {},
                 onDelete: (_, _) async {},
                 onNewVoting: (_) async {},
+                onShowResults: () {},
                 onCsv: null,
               ),
             ),
@@ -252,6 +299,7 @@ void main() {
                 onAutoSave: (_) async {},
                 onDelete: (_, _) async {},
                 onNewVoting: (_) async {},
+                onShowResults: () {},
                 onCsv: null,
               ),
             ),
@@ -422,25 +470,6 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
-    testWidgets('keeps presentation visible when deleting cannot persist', (
-      tester,
-    ) async {
-      await tester.pumpWidget(
-        _adminPanelApp(
-          onDelete: (_, _) async => throw StateError('storage unavailable'),
-        ),
-      );
-
-      await tester.tap(find.text('Usuń'));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('Usuń prezentację'));
-      await tester.pumpAndSettle();
-
-      expect(find.text('Talk one'), findsOneWidget);
-      expect(find.text('Nie udało się usunąć prezentacji.'), findsOneWidget);
-      expect(tester.takeException(), isNull);
-    });
-
     testWidgets('disables adding presentations at five-item limit', (
       tester,
     ) async {
@@ -478,6 +507,7 @@ void main() {
               onAutoSave: (_) async {},
               onDelete: (_, _) async {},
               onNewVoting: (_) async {},
+              onShowResults: () {},
               onCsv: null,
             ),
           ),
@@ -489,11 +519,107 @@ void main() {
         find.byKey(AdminPresentationPanel.addPresentationKey),
         findsOneWidget,
       );
+      expect(find.byKey(const ValueKey('show-results')), findsOneWidget);
+      expect(
+        tester
+            .widget<FilledButton>(find.byKey(const ValueKey('show-results')))
+            .onPressed,
+        isNull,
+      );
       expect(find.text('Eksportuj wyniki do CSV'), findsOneWidget);
       final export = tester.widget<OutlinedButton>(
         find.byKey(AdminPresentationPanel.exportCsvKey),
       );
       expect(export.onPressed, isNull);
+    });
+
+    testWidgets('places show-results button beside CSV export button', (
+      tester,
+    ) async {
+      var pressed = false;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: AdminPresentationPanel(
+              presentations: const [
+                Presentation(
+                  id: 'p1',
+                  title: 'Talk one',
+                  speaker: 'Speaker one',
+                ),
+              ],
+              roundCount: (_) => 1,
+              onAutoSave: (_) async {},
+              onDelete: (_, _) async {},
+              onNewVoting: (_) async {},
+              onShowResults: () => pressed = true,
+              onCsv: () {},
+            ),
+          ),
+        ),
+      );
+
+      final showResults = find.byKey(const ValueKey('show-results'));
+      final export = find.byKey(AdminPresentationPanel.exportCsvKey);
+      expect(showResults, findsOneWidget);
+      expect(
+        tester.getRect(showResults).center.dy,
+        closeTo(tester.getRect(export).center.dy, 1),
+      );
+      await tester.tap(showResults);
+      expect(pressed, isTrue);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('stacks all organizer actions vertically in phone portrait', (
+      tester,
+    ) async {
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(390, 844);
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(_adminPanelApp(onCsv: () {}));
+
+      final add = tester.getRect(
+        find.byKey(AdminPresentationPanel.addPresentationKey),
+      );
+      final export = tester.getRect(
+        find.byKey(AdminPresentationPanel.exportCsvKey),
+      );
+      final show = tester.getRect(find.byKey(const ValueKey('show-results')));
+      expect(add.center.dx, closeTo(export.center.dx, 1));
+      expect(export.center.dx, closeTo(show.center.dx, 1));
+      expect(add.width, closeTo(export.width, 1));
+      expect(show.width, closeTo(export.width, 1));
+      expect(add.height, 56);
+      expect(export.height, 56);
+      expect(show.height, 56);
+      expect(add.bottom, lessThanOrEqualTo(export.top));
+      expect(export.bottom, lessThanOrEqualTo(show.top));
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('lays all organizer actions in one row in phone landscape', (
+      tester,
+    ) async {
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(844, 390);
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(_adminPanelApp(onCsv: () {}));
+
+      final add = tester.getRect(
+        find.byKey(AdminPresentationPanel.addPresentationKey),
+      );
+      final export = tester.getRect(
+        find.byKey(AdminPresentationPanel.exportCsvKey),
+      );
+      final show = tester.getRect(find.byKey(const ValueKey('show-results')));
+      expect(add.center.dy, closeTo(export.center.dy, 1));
+      expect(export.center.dy, closeTo(show.center.dy, 1));
+      expect(add.right, lessThanOrEqualTo(export.left));
+      expect(export.right, lessThanOrEqualTo(show.left));
+      expect(tester.takeException(), isNull);
     });
 
     testWidgets('deletes a presentation only after confirmation', (
@@ -512,6 +638,7 @@ void main() {
               onAutoSave: (_) async {},
               onDelete: (_, updated) async => deletedList = updated,
               onNewVoting: (_) async {},
+              onShowResults: () {},
               onCsv: null,
             ),
           ),
@@ -545,6 +672,7 @@ void main() {
               onAutoSave: (_) async {},
               onDelete: (_, _) async => deleteCalled = true,
               onNewVoting: (_) async {},
+              onShowResults: () {},
               onCsv: null,
             ),
           ),
@@ -579,6 +707,7 @@ void main() {
               onAutoSave: (_) async {},
               onDelete: (_, _) async {},
               onNewVoting: (_) async => voteStarted = true,
+              onShowResults: () {},
               onCsv: () {},
             ),
           ),
@@ -601,6 +730,8 @@ Widget _adminPanelApp({
   ],
   Future<void> Function(List<Presentation>)? onAutoSave,
   Future<void> Function(String, List<Presentation>)? onDelete,
+  VoidCallback? onShowResults,
+  VoidCallback? onCsv,
 }) => MaterialApp(
   home: Scaffold(
     body: SingleChildScrollView(
@@ -610,7 +741,8 @@ Widget _adminPanelApp({
         onAutoSave: onAutoSave ?? (_) async {},
         onDelete: onDelete ?? (_, _) async {},
         onNewVoting: (_) async {},
-        onCsv: null,
+        onShowResults: onShowResults ?? () {},
+        onCsv: onCsv,
       ),
     ),
   ),

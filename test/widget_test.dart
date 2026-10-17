@@ -23,7 +23,7 @@ void main() {
           id: 'empty-event',
           title: 'Empty event',
           date: '2026-01-01',
-          pin: '1234',
+          password: 'kochamjug',
           presentations: [],
         ),
       ),
@@ -70,7 +70,7 @@ void main() {
     },
   );
 
-  testWidgets('rejects incorrect organizer PIN and accepts correct PIN', (
+  testWidgets('rejects incorrect organizer password and accepts correct one', (
     tester,
   ) async {
     final repository = MemoryFeedbackRepository(
@@ -90,12 +90,12 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('open-admin-panel')));
     await tester.pumpAndSettle();
     await tester.enterText(
-      find.byKey(const ValueKey('admin-pin-input')),
+      find.byKey(const ValueKey('admin-password-input')),
       '0000',
     );
     await tester.tap(find.text('Odblokuj'));
     await tester.pumpAndSettle();
-    expect(find.text('Nieprawidłowy PIN. Spróbuj ponownie.'), findsOneWidget);
+    expect(find.text('Nieprawidłowe hasło. Spróbuj ponownie.'), findsOneWidget);
     expect(find.text('Asset talk one'), findsOneWidget);
 
     await tester.tap(find.byKey(const ValueKey('rating-options-menu')));
@@ -103,13 +103,195 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('open-admin-panel')));
     await tester.pumpAndSettle();
     await tester.enterText(
-      find.byKey(const ValueKey('admin-pin-input')),
-      '1234',
+      find.byKey(const ValueKey('admin-password-input')),
+      'kochamjug',
     );
     await tester.tap(find.text('Odblokuj'));
     await tester.pumpAndSettle();
     expect(find.text('Panel organizatora'), findsOneWidget);
     expect(find.text('Prezentacje'), findsOneWidget);
+    final back = tester.widget<OutlinedButton>(
+      find.widgetWithText(OutlinedButton, 'Wróć'),
+    );
+    final side = back.style!.side!.resolve({})!;
+    expect(side.color, const Color(0xff0b6f5d));
+    expect(side.width, 1.5);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('organizer can open and return from rating results', (
+    tester,
+  ) async {
+    final repository = MemoryFeedbackRepository(
+      presentations: testEventConfig.presentations,
+      activeIds: const ['asset-talk-1'],
+      rounds: [
+        FeedbackRound(
+          id: 'round-1',
+          createdAt: DateTime.utc(2026),
+          ratings: const {'asset-talk-1': Rating.good},
+        ),
+      ],
+    );
+    await tester.pumpWidget(
+      FeedbackApp(repository: repository, initialConfig: testEventConfig),
+    );
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 100)),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('rating-options-menu')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('open-admin-panel')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('admin-password-input')),
+      'kochamjug',
+    );
+    await tester.tap(find.text('Odblokuj'));
+    await tester.pumpAndSettle();
+
+    final showResults = find.byKey(const ValueKey('show-results'));
+    final exportResults = find.byKey(AdminPresentationPanel.exportCsvKey);
+    await tester.ensureVisible(showResults);
+    expect(tester.getRect(showResults).center.dy, greaterThan(0));
+    expect(tester.getRect(exportResults).center.dy, greaterThan(0));
+    await tester.tap(showResults);
+    await tester.pumpAndSettle();
+    expect(find.text('Wyniki'), findsOneWidget);
+    expect(find.text('Dobrze: 1'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('result-asset-talk-1-good')),
+      findsOneWidget,
+    );
+
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(find.text('Panel organizatora'), findsOneWidget);
+    expect(find.text('Prezentacje'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('deleting presentation removes its ratings from results', (
+    tester,
+  ) async {
+    final repository = MemoryFeedbackRepository(
+      presentations: testEventConfig.presentations,
+      rounds: [
+        FeedbackRound(
+          id: 'round-1',
+          createdAt: DateTime.utc(2026),
+          ratings: const {
+            'asset-talk-1': Rating.good,
+            'asset-talk-2': Rating.superRating,
+          },
+        ),
+        FeedbackRound(
+          id: 'round-2',
+          createdAt: DateTime.utc(2026, 1, 2),
+          ratings: const {'asset-talk-1': Rating.neutral},
+        ),
+      ],
+    );
+    await tester.pumpWidget(
+      FeedbackApp(repository: repository, initialConfig: testEventConfig),
+    );
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 100)),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Panel organizatora'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('admin-password-input')),
+      'kochamjug',
+    );
+    await tester.tap(find.text('Odblokuj'));
+    await tester.pumpAndSettle();
+
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('delete-presentation-asset-talk-2')),
+    );
+    await tester.tap(
+      find.byKey(const ValueKey('delete-presentation-asset-talk-2')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Usuń prezentację'));
+    await tester.pumpAndSettle();
+
+    expect(repository.presentations.map((presentation) => presentation.id), [
+      'asset-talk-1',
+    ]);
+    expect(repository.rounds, hasLength(2));
+    expect(repository.rounds[0].ratings, {'asset-talk-1': Rating.good});
+    expect(repository.rounds[1].ratings, {'asset-talk-1': Rating.neutral});
+
+    final showResults = find.byKey(const ValueKey('show-results'));
+    final exportResults = find.byKey(AdminPresentationPanel.exportCsvKey);
+    await tester.ensureVisible(showResults);
+    expect(tester.getRect(showResults).center.dy, greaterThan(0));
+    expect(tester.getRect(exportResults).center.dy, greaterThan(0));
+    await tester.tap(showResults);
+    await tester.pumpAndSettle();
+    expect(find.text('Asset talk one'), findsOneWidget);
+    expect(find.text('Asset talk two'), findsNothing);
+    expect(
+      find.byKey(const ValueKey('result-asset-talk-1-good')),
+      findsOneWidget,
+    );
+    expect(find.text('Dobrze: 1'), findsOneWidget);
+    expect(find.text('Neutralnie: 1'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('startup removes orphaned ratings from stored rounds', (
+    tester,
+  ) async {
+    final repository = MemoryFeedbackRepository(
+      presentations: const [
+        Presentation(
+          id: 'current-talk',
+          title: 'Current talk',
+          speaker: 'Speaker',
+        ),
+      ],
+      rounds: [
+        FeedbackRound(
+          id: 'mixed-round',
+          createdAt: DateTime.utc(2026),
+          ratings: const {
+            'current-talk': Rating.good,
+            'deleted-talk': Rating.superRating,
+          },
+        ),
+        FeedbackRound(
+          id: 'orphaned-round',
+          createdAt: DateTime.utc(2026, 1, 2),
+          ratings: const {'deleted-talk': Rating.poor},
+        ),
+      ],
+    );
+
+    await tester.pumpWidget(
+      FeedbackApp(
+        repository: repository,
+        initialConfig: const EventConfig(
+          id: 'event-test',
+          title: 'Test event',
+          date: '2026-01-01',
+          password: 'kochamjug',
+          presentations: [],
+        ),
+      ),
+    );
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 100)),
+    );
+    await tester.pumpAndSettle();
+
+    expect(repository.rounds, hasLength(1));
+    expect(repository.rounds.single.id, 'mixed-round');
+    expect(repository.rounds.single.ratings, {'current-talk': Rating.good});
     expect(tester.takeException(), isNull);
   });
 
@@ -136,10 +318,17 @@ void main() {
     );
     expect(find.text('Oceń prezentację'), findsOneWidget);
     expect(repository.rounds, isEmpty);
+    expect(_selectedRating(tester), Rating.poor);
 
     repository.saveRoundError = null;
     await tester.pump(const Duration(seconds: 5));
     await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<FilledButton>(find.byKey(const ValueKey('submit-rating')))
+          .onPressed,
+      isNotNull,
+    );
     await tester.tap(find.byKey(const ValueKey('submit-rating')));
     await tester.pumpAndSettle();
     expect(repository.rounds, hasLength(1));
@@ -172,8 +361,8 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('open-admin-panel')));
     await tester.pumpAndSettle();
     await tester.enterText(
-      find.byKey(const ValueKey('admin-pin-input')),
-      '1234',
+      find.byKey(const ValueKey('admin-password-input')),
+      'kochamjug',
     );
     await tester.tap(find.text('Odblokuj'));
     await tester.pumpAndSettle();
@@ -184,6 +373,60 @@ void main() {
     await tester.pump(const Duration(seconds: 1));
     expect(find.text('Panel organizatora'), findsOneWidget);
     expect(find.text('Prezentacje'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('disables results and export when presentation list is empty', (
+    tester,
+  ) async {
+    final repository = MemoryFeedbackRepository(
+      rounds: [
+        FeedbackRound(
+          id: 'orphaned-round',
+          createdAt: DateTime.utc(2026),
+          ratings: const {'removed-presentation': Rating.good},
+        ),
+      ],
+    );
+    await tester.pumpWidget(
+      FeedbackApp(
+        repository: repository,
+        initialConfig: const EventConfig(
+          id: 'empty-event',
+          title: 'Empty event',
+          date: '2026-01-01',
+          password: 'kochamjug',
+          presentations: [],
+        ),
+      ),
+    );
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 100)),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Panel organizatora'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('admin-password-input')),
+      'kochamjug',
+    );
+    await tester.tap(find.text('Odblokuj'));
+    await tester.pumpAndSettle();
+
+    expect(
+      tester
+          .widget<FilledButton>(find.byKey(const ValueKey('show-results')))
+          .onPressed,
+      isNull,
+    );
+    expect(
+      tester
+          .widget<OutlinedButton>(
+            find.byKey(AdminPresentationPanel.exportCsvKey),
+          )
+          .onPressed,
+      isNull,
+    );
     expect(tester.takeException(), isNull);
   });
 
@@ -213,8 +456,8 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('open-admin-panel')));
     await tester.pumpAndSettle();
     await tester.enterText(
-      find.byKey(const ValueKey('admin-pin-input')),
-      '1234',
+      find.byKey(const ValueKey('admin-password-input')),
+      'kochamjug',
     );
     await tester.tap(find.text('Odblokuj'));
     await tester.pumpAndSettle();
@@ -234,4 +477,16 @@ void main() {
     );
     expect(tester.takeException(), isNull);
   });
+}
+
+Rating? _selectedRating(WidgetTester tester) {
+  for (final rating in Rating.values) {
+    final button = tester.widget<OutlinedButton>(
+      find.byKey(ValueKey('rating-${rating.code}-asset-talk-1')),
+    );
+    if (button.style?.backgroundColor?.resolve({}) != Colors.white) {
+      return rating;
+    }
+  }
+  return null;
 }

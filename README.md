@@ -114,20 +114,21 @@ Installing an iOS build on an iPhone requires Apple code signing and the appropr
 ### First launch and setup
 
 - The app runs offline and starts with no presentations. Voters see a waiting screen until the organizer creates a presentation and starts voting.
-- Event details, the initial presentation list, and organizer PIN are read from `assets/config/event.json`. The bundled configuration has an empty presentation list. Set an appropriate organizer PIN in this file before distributing the app.
+- Event details, the initial presentation list, and organizer password are read from `assets/config/event.json`. The bundled configuration has an empty presentation list. Set an appropriate organizer password in this file before distributing the app.
 - Presentation edits, active voting selection, and submitted ratings are stored locally on each device. They are not synchronized between devices.
 
 ### Organizer workflow
 
-1. Open the `⋮` menu on the voting screen, choose **Organizer panel**, and enter the PIN.
+1. Open the `⋮` menu on the voting screen, choose **Organizer panel**, and enter the password.
 2. Add, edit, or delete presentations. Up to five presentations are allowed; changes are saved on the device.
 3. Choose **New voting** for a presentation. If it already has ratings, the app asks for confirmation before clearing those ratings and starting a new vote.
-4. View collected rating counts in the organizer panel. Export results to CSV when ratings exist; the app opens the platform's sharing or save dialog.
+4. Select **Show results** to open a per-presentation breakdown of `Poor`, `Neutral`, `Good`, and `Super` ratings. The button is disabled until presentations have ratings.
+5. Select **Export results to CSV** to share or save the collected ratings. This button is disabled when there are no presentations or ratings.
 
 ### Voter workflow
 
 1. The voting screen shows the currently active presentation. In landscape, it displays the title and speaker, instructions, four rating buttons, and the submit button together.
 2. Choose one rating: `Słabo`, `Neutralnie`, `Dobrze`, or `Super`. The selection can be changed before submission.
-3. Select **Zatwierdź** to save the rating locally. The app shows a five-second handoff countdown, then returns to the same presentation for the next voter.
+3. Select **Zatwierdź** to save the rating locally. The app shows a three-second handoff countdown, then returns to the same presentation for the next voter.
 
 Each submission is stored as a voting round containing the selected rating for the active presentation. If a presentation is deleted or its voting is reset, its ratings are removed; unrelated presentation ratings remain. CSV export uses the presentation details available at export time and falls back to the presentation ID if details are no longer available.

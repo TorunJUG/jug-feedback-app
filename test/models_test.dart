@@ -23,7 +23,7 @@ void main() {
 
     test('loads config with up to five presentations', () {
       final config = EventConfig.fromJson(_configJson(5));
-      expect(config.pin, '1234');
+      expect(config.password, 'kochamjug');
       expect(config.presentations, hasLength(5));
     });
 
@@ -74,7 +74,7 @@ void main() {
 
 Map<String, dynamic> _configJson(int count) => {
   'event': {'id': 'event-1', 'title': 'JUG', 'date': '2026-01-01'},
-  'admin': {'pin': '1234'},
+  'admin': {'password': 'kochamjug'},
   'presentations': List.generate(
     count,
     (index) => {

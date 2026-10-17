@@ -91,6 +91,25 @@ void main() {
 
     expect(await repository.loadRounds(), isEmpty);
   });
+
+  test('retains only ratings for configured presentations', () async {
+    final repository = LocalRepository();
+    await repository.saveRound(
+      FeedbackRound(
+        id: 'mixed-round',
+        createdAt: DateTime.utc(2026),
+        ratings: {'kept-talk': Rating.good, 'removed-talk': Rating.superRating},
+      ),
+    );
+    await repository.saveRound(_round('orphaned-only', Rating.poor));
+
+    await repository.retainRatingsForPresentations({'kept-talk'});
+
+    final loaded = await repository.loadRounds();
+    expect(loaded, hasLength(1));
+    expect(loaded.single.id, 'mixed-round');
+    expect(loaded.single.ratings, {'kept-talk': Rating.good});
+  });
 }
 
 FeedbackRound _round(String id, Rating rating) => FeedbackRound(

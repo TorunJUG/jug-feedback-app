@@ -352,11 +352,11 @@ void main() {
         await tester.pump();
 
         expect(find.text('Przekaż telefon kolejnej osobie'), findsOneWidget);
-        expect(find.text('5'), findsOneWidget);
+        expect(find.text('3'), findsOneWidget);
         expect(repository.rounds, hasLength(1));
         expect(repository.rounds.single.ratings['p1'], Rating.superRating);
 
-        for (var i = 0; i < 5; i++) {
+        for (var i = 0; i < 3; i++) {
           await tester.pump(const Duration(seconds: 1));
         }
         await tester.pump();

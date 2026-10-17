@@ -53,6 +53,27 @@ class MemoryFeedbackRepository implements FeedbackRepository {
   }
 
   @override
+  Future<void> retainRatingsForPresentations(
+    Set<String> presentationIds,
+  ) async {
+    rounds = rounds
+        .map((round) {
+          final retainedRatings = Map<String, Rating>.fromEntries(
+            round.ratings.entries.where(
+              (entry) => presentationIds.contains(entry.key),
+            ),
+          );
+          return FeedbackRound(
+            id: round.id,
+            createdAt: round.createdAt,
+            ratings: retainedRatings,
+          );
+        })
+        .where((round) => round.ratings.isNotEmpty)
+        .toList();
+  }
+
+  @override
   Future<List<Presentation>?> loadPresentations() async => [...presentations];
 
   @override
@@ -75,7 +96,7 @@ const testEventConfig = EventConfig(
   id: 'event-test',
   title: 'Feedback App Test',
   date: '2026-01-01',
-  pin: '1234',
+  password: 'kochamjug',
   presentations: [
     Presentation(
       id: 'asset-talk-1',

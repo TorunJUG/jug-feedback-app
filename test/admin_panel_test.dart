@@ -41,10 +41,18 @@ void main() {
       expect(find.text('Prezentacje'), findsOneWidget);
       expect(find.text('Zebrane oceny'), findsOneWidget);
       expect(find.text('7'), findsOneWidget);
+      final startVoting = find.byKey(const ValueKey('start-voting-p2'));
+      expect(
+        tester.widget<CustomPaint>(startVoting).foregroundPainter,
+        isNotNull,
+      );
       expect(
         tester
-            .widget<FilledButton>(find.byKey(const ValueKey('start-voting-p2')))
-            .onPressed,
+            .widget<InkWell>(find.descendant(
+              of: startVoting,
+              matching: find.byType(InkWell),
+            ))
+            .onTap,
         isNotNull,
       );
       expect(activeIds, isEmpty);
@@ -177,7 +185,7 @@ void main() {
         find.widgetWithText(OutlinedButton, 'Edytuj'),
       );
       final editSide = edit.style!.side!.resolve({})!;
-      expect(editSide.color, const Color(0xff0b6f5d));
+      expect(editSide.color, const Color(0xffa9cbbb));
       expect(editSide.width, 1.5);
       expect(edit.style!.minimumSize!.resolve({}), const Size(48, 48));
 
@@ -185,7 +193,7 @@ void main() {
         find.byKey(AdminPresentationPanel.exportCsvKey),
       );
       final exportSide = export.style!.side!.resolve({})!;
-      expect(exportSide.color, const Color(0xff0b6f5d));
+      expect(exportSide.color, const Color(0xffa9cbbb));
       expect(exportSide.width, 1.5);
       expect(export.style!.minimumSize!.resolve({}), const Size(48, 48));
       expect(tester.takeException(), isNull);
@@ -571,6 +579,53 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
+    testWidgets('shows kiosk controls only when device owner is available', (
+      tester,
+    ) async {
+      var kioskActionCalled = false;
+      await tester.pumpWidget(
+        _adminPanelApp(
+          kioskAvailable: true,
+          onKioskToggle: () => kioskActionCalled = true,
+        ),
+      );
+
+      expect(find.text('Włącz kiosk'), findsOneWidget);
+      final kioskButton = tester.widget<CustomPaint>(
+        find.byKey(const ValueKey('kiosk-mode-toggle')),
+      );
+      expect(kioskButton.foregroundPainter, isNotNull);
+      await tester.tap(find.byKey(const ValueKey('kiosk-mode-toggle')));
+      expect(kioskActionCalled, isTrue);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('hides kiosk controls when device is not device owner', (
+      tester,
+    ) async {
+      await tester.pumpWidget(_adminPanelApp());
+
+      expect(find.byKey(const ValueKey('kiosk-mode-toggle')), findsNothing);
+      expect(find.text('Włącz kiosk'), findsNothing);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('shows active kiosk state and disable action', (tester) async {
+      var kioskActionCalled = false;
+      await tester.pumpWidget(
+        _adminPanelApp(
+          kioskAvailable: true,
+          kioskEnabled: true,
+          onKioskToggle: () => kioskActionCalled = true,
+        ),
+      );
+
+      expect(find.text('Wyłącz kiosk'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('kiosk-mode-toggle')));
+      expect(kioskActionCalled, isTrue);
+      expect(tester.takeException(), isNull);
+    });
+
     testWidgets('stacks all organizer actions vertically in phone portrait', (
       tester,
     ) async {
@@ -732,6 +787,9 @@ Widget _adminPanelApp({
   Future<void> Function(String, List<Presentation>)? onDelete,
   VoidCallback? onShowResults,
   VoidCallback? onCsv,
+  bool kioskAvailable = false,
+  bool kioskEnabled = false,
+  VoidCallback? onKioskToggle,
 }) => MaterialApp(
   home: Scaffold(
     body: SingleChildScrollView(
@@ -742,6 +800,9 @@ Widget _adminPanelApp({
         onDelete: onDelete ?? (_, _) async {},
         onNewVoting: (_) async {},
         onShowResults: onShowResults ?? () {},
+        kioskAvailable: kioskAvailable,
+        kioskEnabled: kioskEnabled,
+        onKioskToggle: onKioskToggle,
         onCsv: onCsv,
       ),
     ),

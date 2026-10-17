@@ -333,13 +333,13 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('rating-super-p1')));
       await tester.pump();
 
-      final superRating = tester.widget<OutlinedButton>(
-        find.byKey(const ValueKey('rating-super-p1')),
+      final superRatingBackground = tester.widget<Material>(
+        find.descendant(
+          of: find.byKey(const ValueKey('rating-super-p1')),
+          matching: find.byType(Material),
+        ),
       );
-      expect(
-        superRating.style?.backgroundColor?.resolve({}),
-        const Color(0xffdce8ff),
-      );
+      expect(superRatingBackground.color, const Color(0xffdce8ff));
     });
 
     testWidgets(

@@ -58,6 +58,10 @@ void main() {
       expect(find.text('Dobrze: 1'), findsOneWidget);
       expect(find.text('Super: 1'), findsOneWidget);
       expect(find.text('Neutralnie: 0'), findsNWidgets(2));
+      final ratingResult = tester.widget<CustomPaint>(
+        find.byKey(const ValueKey('result-p1-good')),
+      );
+      expect(ratingResult.foregroundPainter, isNotNull);
       expect(tester.takeException(), isNull);
     });
 
@@ -98,6 +102,14 @@ void main() {
           find.byKey(ValueKey('result-p1-${rating.code}')),
         );
         expect(countRect.center.dx, closeTo(headerRect.center.dx, 1));
+        expect(
+          tester
+              .widget<CustomPaint>(
+                find.byKey(ValueKey('result-p1-${rating.code}')),
+              )
+              .foregroundPainter,
+          isNotNull,
+        );
       }
       expect(tester.takeException(), isNull);
     });

@@ -10,6 +10,84 @@ import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+const _kioskChannel = MethodChannel('com.feedbackapp.feedback_app/kiosk');
+const _kioskShakeChannel = EventChannel(
+  'com.feedbackapp.feedback_app/kiosk_shake',
+);
+
+@visibleForTesting
+Future<bool> Function()? kioskDeviceOwnerOverride;
+@visibleForTesting
+Future<bool> Function()? kioskActiveOverride;
+@visibleForTesting
+Future<bool> Function()? kioskEnableOverride;
+@visibleForTesting
+Future<bool> Function()? kioskDisableOverride;
+@visibleForTesting
+bool enableKioskShakeEventsForTesting = false;
+@visibleForTesting
+Stream<dynamic>? kioskShakeEventsOverride;
+
+Future<bool> isKioskDeviceOwner() async {
+  if (kioskDeviceOwnerOverride case final override?) return override();
+  if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return false;
+  try {
+    return await _kioskChannel.invokeMethod<bool>('isDeviceOwner') ?? false;
+  } on PlatformException catch (_) {
+    return false;
+  } on MissingPluginException {
+    return false;
+  }
+}
+
+Future<bool> enableKioskMode() async {
+  if (kioskEnableOverride case final override?) return override();
+  if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return false;
+  try {
+    return await _kioskChannel.invokeMethod<bool>('enableLockTask') ?? false;
+  } on PlatformException {
+    return false;
+  } on MissingPluginException {
+    return false;
+  }
+}
+
+Future<bool> isKioskModeActive() async {
+  if (kioskActiveOverride case final override?) return override();
+  if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return false;
+  try {
+    return await _kioskChannel.invokeMethod<bool>('isLockTaskActive') ?? false;
+  } on PlatformException {
+    return false;
+  } on MissingPluginException {
+    return false;
+  }
+}
+
+Future<bool> isScreenPinningActive() async {
+  if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return false;
+  try {
+    return await _kioskChannel.invokeMethod<bool>('isScreenPinningActive') ??
+        false;
+  } on PlatformException {
+    return false;
+  } on MissingPluginException {
+    return false;
+  }
+}
+
+Future<bool> disableKioskMode() async {
+  if (kioskDisableOverride case final override?) return override();
+  if (kIsWeb || defaultTargetPlatform != TargetPlatform.android) return false;
+  try {
+    return await _kioskChannel.invokeMethod<bool>('disableLockTask') ?? false;
+  } on PlatformException {
+    return false;
+  } on MissingPluginException {
+    return false;
+  }
+}
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
@@ -378,12 +456,153 @@ class _FeedbackHomeState extends State<FeedbackHome> {
   bool _savingRound = false;
   int? _countdown;
   Timer? _countdownTimer;
+  bool _kioskDeviceOwner = false;
+  bool _kioskEnabled = false;
+  bool _kioskToggleInProgress = false;
+  StreamSubscription<dynamic>? _kioskShakeSubscription;
+  bool _emergencyExitDialogOpen = false;
 
   @override
   void initState() {
     super.initState();
     _repository = widget.repository ?? LocalRepository();
+    _loadKioskAvailability();
     _load();
+  }
+
+  void _startKioskShakeListener() {
+    if (_kioskShakeSubscription != null) return;
+    if (kioskShakeEventsOverride case final stream?) {
+      _kioskShakeSubscription = stream.listen(
+        (_) => _handleKioskShake(),
+        onError: (_) {},
+      );
+    } else if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+      _kioskShakeSubscription = _kioskShakeChannel.receiveBroadcastStream().listen(
+        (_) => _handleKioskShake(),
+        onError: (_) {},
+      );
+    }
+  }
+
+  void _stopKioskShakeListener() {
+    _kioskShakeSubscription?.cancel();
+    _kioskShakeSubscription = null;
+  }
+
+  @override
+  void dispose() {
+    _stopKioskShakeListener();
+    _countdownTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _handleKioskShake() async {
+    if (!mounted ||
+        !_kioskEnabled ||
+        !_kioskDeviceOwner ||
+        _emergencyExitDialogOpen ||
+        _kioskToggleInProgress) {
+      return;
+    }
+    _emergencyExitDialogOpen = true;
+    try {
+      final password = await showDialog<String>(
+        context: context,
+        barrierDismissible: false,
+        barrierColor: const Color(0x99000000),
+        requestFocus: false,
+        builder: (_) => const _EmergencyKioskExitDialog(),
+      );
+      if (!mounted || password == null) return;
+      if (password != _config?.password) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Nieprawidłowe hasło organizatora.')),
+        );
+        return;
+      }
+      await _setKioskMode(false);
+    } finally {
+      _emergencyExitDialogOpen = false;
+    }
+  }
+
+  Future<void> _loadKioskAvailability() async {
+    final isOwner = await isKioskDeviceOwner();
+    final lockTaskActive = await isKioskModeActive();
+    if (mounted) {
+      setState(() {
+        _kioskDeviceOwner = isOwner;
+        _kioskEnabled = lockTaskActive;
+      });
+      if (isOwner && lockTaskActive) {
+        _startKioskShakeListener();
+      } else {
+        _stopKioskShakeListener();
+      }
+    }
+  }
+
+  Future<void> _setKioskMode(bool enabled) async {
+    if (_kioskToggleInProgress) return;
+    final messenger = ScaffoldMessenger.of(context);
+
+    if (enabled && await isScreenPinningActive()) {
+      if (!mounted) return;
+      messenger
+        ..removeCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Najpierw odepnij przypięty ekran gestem Androida, potem włącz kiosk.',
+            ),
+          ),
+        );
+      return;
+    }
+
+    setState(() {
+      _kioskEnabled = enabled;
+      _kioskToggleInProgress = true;
+    });
+    messenger.removeCurrentSnackBar();
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          enabled ? 'Tryb kiosku włączony.' : 'Tryb kiosku wyłączony.',
+        ),
+      ),
+    );
+
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted) return;
+
+    final succeeded = enabled
+        ? await enableKioskMode()
+        : await disableKioskMode();
+    if (!mounted) return;
+
+    setState(() {
+      _kioskToggleInProgress = false;
+      if (!succeeded) _kioskEnabled = !enabled;
+    });
+    if (succeeded && enabled) {
+      _startKioskShakeListener();
+    } else if (succeeded) {
+      _stopKioskShakeListener();
+    }
+    if (!succeeded) {
+      messenger.removeCurrentSnackBar();
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            enabled
+                ? 'Nie można włączyć kiosku. To urządzenie musi być skonfigurowane jako Device Owner.'
+                : 'Nie można wyłączyć trybu kiosku.',
+          ),
+        ),
+      );
+    }
   }
 
   Future<void> _load() async {
@@ -427,12 +646,6 @@ class _FeedbackHomeState extends State<FeedbackHome> {
   }
 
   void _choose(String id, Rating rating) => setState(() => _draft[id] = rating);
-
-  @override
-  void dispose() {
-    _countdownTimer?.cancel();
-    super.dispose();
-  }
 
   Future<void> _submitRound() async {
     final visiblePresentations = _visiblePresentations;
@@ -639,6 +852,13 @@ class _FeedbackHomeState extends State<FeedbackHome> {
             ),
           ),
         ),
+        kioskAvailable:
+            defaultTargetPlatform == TargetPlatform.android &&
+            _kioskDeviceOwner,
+        kioskEnabled: _kioskEnabled,
+        onKioskToggle: _kioskToggleInProgress
+            ? null
+            : () => _setKioskMode(!_kioskEnabled),
         onCsv: _presentations.isEmpty || _rounds.isEmpty
             ? null
             : () async {
@@ -967,26 +1187,12 @@ class _LandscapeVotingLayout extends StatelessWidget {
           padding: EdgeInsets.zero,
           children: Rating.values.map((rating) {
             final isSelected = selected == rating;
-            return OutlinedButton(
+            return _RatingChoiceButton(
               key: ValueKey('rating-${rating.code}-${presentation.id}'),
+              rating: rating,
+              selected: isSelected,
+              borderRadius: desktop ? 8 : 14,
               onPressed: () => onSelect(presentation.id, rating),
-              style: OutlinedButton.styleFrom(
-                backgroundColor: isSelected
-                    ? _ratingColor(rating)
-                    : Colors.white,
-                foregroundColor: const Color(0xff283b35),
-                side: BorderSide(
-                  color: isSelected
-                      ? _ratingBorderColor(rating)
-                      : const Color(0xffd8e1dc),
-                  width: isSelected ? 2 : 1,
-                ),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(desktop ? 8 : 14),
-                ),
-                minimumSize: const Size(0, 48),
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              ),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
@@ -1208,6 +1414,52 @@ class _LandscapeVotingLayout extends StatelessWidget {
   }
 }
 
+class _RatingChoiceButton extends StatelessWidget {
+  const _RatingChoiceButton({
+    super.key,
+    required this.rating,
+    required this.selected,
+    required this.borderRadius,
+    required this.onPressed,
+    required this.child,
+  });
+
+  final Rating rating;
+  final bool selected;
+  final double borderRadius;
+  final VoidCallback onPressed;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final radius = BorderRadius.circular(borderRadius);
+    final borderColor = selected
+        ? _ratingBorderColor(rating)
+        : const Color(0xffb8cbc3);
+    final borderWidth = selected ? 2.0 : 1.5;
+    return CustomPaint(
+      foregroundPainter: _ContinuousButtonBorderPainter(
+        borderRadius: borderRadius,
+        color: borderColor,
+        strokeWidth: borderWidth,
+      ),
+      child: Material(
+        color: selected ? _ratingColor(rating) : Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: radius),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onPressed,
+          borderRadius: radius,
+          child: Padding(
+            padding: const EdgeInsets.all(8),
+            child: Center(child: child),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _PresentationCard extends StatelessWidget {
   const _PresentationCard({
     required this.presentation,
@@ -1308,29 +1560,12 @@ class _PresentationCard extends StatelessWidget {
               label: rating.semanticLabel,
               button: true,
               selected: isSelected,
-              child: OutlinedButton(
+              child: _RatingChoiceButton(
                 key: ValueKey('rating-${rating.code}-${presentation.id}'),
+                rating: rating,
+                selected: isSelected,
+                borderRadius: 16,
                 onPressed: () => onSelect(presentation.id, rating),
-                style: OutlinedButton.styleFrom(
-                  backgroundColor: isSelected
-                      ? _ratingColor(rating)
-                      : Colors.white,
-                  foregroundColor: const Color(0xff283b35),
-                  side: BorderSide(
-                    color: isSelected
-                        ? _ratingBorderColor(rating)
-                        : const Color(0xffd8e1dc),
-                    width: isSelected ? 2 : 1,
-                  ),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  minimumSize: const Size(0, 48),
-                  padding: const EdgeInsets.symmetric(
-                    vertical: 6,
-                    horizontal: 8,
-                  ),
-                ),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -1413,10 +1648,10 @@ Color _ratingColor(Rating rating) => switch (rating) {
 };
 
 Color _ratingBorderColor(Rating rating) => switch (rating) {
-  Rating.poor => const Color(0xffc9685b),
-  Rating.neutral => const Color(0xffbf8a22),
-  Rating.good => const Color(0xff25866d),
-  Rating.superRating => const Color(0xff5876b8),
+  Rating.poor => const Color(0xffe3a39a),
+  Rating.neutral => const Color(0xffe3c77e),
+  Rating.good => const Color(0xff8fcab5),
+  Rating.superRating => const Color(0xffa0b4e0),
 };
 
 class _CountdownScreen extends StatelessWidget {
@@ -1466,6 +1701,9 @@ class _AdminScreen extends StatelessWidget {
     required this.onDelete,
     required this.onNewVoting,
     required this.onShowResults,
+    required this.kioskAvailable,
+    required this.kioskEnabled,
+    required this.onKioskToggle,
     required this.onCsv,
   });
   final List<FeedbackRound> rounds;
@@ -1477,6 +1715,9 @@ class _AdminScreen extends StatelessWidget {
   onDelete;
   final Future<void> Function(List<String> ids) onNewVoting;
   final VoidCallback onShowResults;
+  final bool kioskAvailable;
+  final bool kioskEnabled;
+  final VoidCallback? onKioskToggle;
   final VoidCallback? onCsv;
   @override
   Widget build(BuildContext context) {
@@ -1511,9 +1752,9 @@ class _AdminScreen extends StatelessWidget {
                               padding: const EdgeInsets.symmetric(
                                 horizontal: 24,
                               ),
-                              foregroundColor: const Color(0xff0b6f5d),
+                              foregroundColor: const Color(0xff4e8c7d),
                               side: const BorderSide(
-                                color: Color(0xff0b6f5d),
+                                color: Color(0xffa9cbbb),
                                 width: 1.5,
                               ),
                               shape: RoundedRectangleBorder(
@@ -1569,6 +1810,9 @@ class _AdminScreen extends StatelessWidget {
                       onDelete: onDelete,
                       onNewVoting: onNewVoting,
                       onShowResults: onShowResults,
+                      kioskAvailable: kioskAvailable,
+                      kioskEnabled: kioskEnabled,
+                      onKioskToggle: onKioskToggle,
                       onCsv: onCsv,
                     ),
                   ],
@@ -1732,10 +1976,28 @@ class _WideRatingResultRow extends StatelessWidget {
           for (final rating in Rating.values)
             Expanded(
               flex: 16,
-              child: Text(
-                '${counts[rating] ?? 0}',
-                key: ValueKey('result-${presentation.id}-${rating.code}'),
-                textAlign: TextAlign.center,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 4),
+                child: CustomPaint(
+                  key: ValueKey('result-${presentation.id}-${rating.code}'),
+                  foregroundPainter: const _ContinuousButtonBorderPainter(
+                    borderRadius: 8,
+                    color: Color(0xffb8cbc3),
+                    strokeWidth: 1.5,
+                  ),
+                  child: Container(
+                    constraints: const BoxConstraints(minHeight: 44),
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      '${counts[rating] ?? 0}',
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                ),
               ),
             ),
         ],
@@ -1773,11 +2035,32 @@ class _CompactRatingResultCard extends StatelessWidget {
             runSpacing: 8,
             children: [
               for (final rating in Rating.values)
-                Chip(
+                CustomPaint(
                   key: ValueKey('result-${presentation.id}-${rating.code}'),
-                  avatar: Text(rating.label),
-                  label: Text(
-                    '${rating.semanticLabel}: ${counts[rating] ?? 0}',
+                  foregroundPainter: const _ContinuousButtonBorderPainter(
+                    borderRadius: 8,
+                    color: Color(0xffb8cbc3),
+                    strokeWidth: 1.5,
+                  ),
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 7,
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(rating.label),
+                          const SizedBox(width: 6),
+                          Text('${rating.semanticLabel}: ${counts[rating] ?? 0}'),
+                        ],
+                      ),
+                    ),
                   ),
                 ),
             ],
@@ -1797,6 +2080,9 @@ class AdminPresentationPanel extends StatefulWidget {
     required this.onDelete,
     required this.onNewVoting,
     required this.onShowResults,
+    this.kioskAvailable = false,
+    this.kioskEnabled = false,
+    this.onKioskToggle,
     required this.onCsv,
     required this.roundCount,
   });
@@ -1807,6 +2093,9 @@ class AdminPresentationPanel extends StatefulWidget {
   onDelete;
   final Future<void> Function(List<String> ids) onNewVoting;
   final VoidCallback onShowResults;
+  final bool kioskAvailable;
+  final bool kioskEnabled;
+  final VoidCallback? onKioskToggle;
   final VoidCallback? onCsv;
   final int Function(String presentationId) roundCount;
   static const addPresentationKey = ValueKey('admin-add-presentation');
@@ -1916,28 +2205,53 @@ class _AdminPresentationPanelState extends State<AdminPresentationPanel> {
                 final presentation = entry.value;
                 final ratingCount = widget.roundCount(presentation.id);
                 final actionButtons = [
-                  FilledButton.tonal(
+                  CustomPaint(
                     key: ValueKey('start-voting-${presentation.id}'),
-                    onPressed: () => _startVoting(presentation),
-                    child: const Text('Nowe głosowanie'),
+                    foregroundPainter: const _ContinuousButtonBorderPainter(
+                      borderRadius: 24,
+                      color: Color(0xffd3eee5),
+                      strokeWidth: 1.4,
+                    ),
+                    child: Material(
+                      color: const Color(0xffcce9df),
+                      borderRadius: BorderRadius.circular(24),
+                      child: InkWell(
+                        onTap: () => _startVoting(presentation),
+                        borderRadius: BorderRadius.circular(24),
+                        child: const Padding(
+                          padding: EdgeInsets.symmetric(
+                            horizontal: 12,
+                            vertical: 10,
+                          ),
+                          child: Center(child: Text('Nowe głosowanie')),
+                        ),
+                      ),
+                    ),
                   ),
-                  OutlinedButton(
-                    onPressed: () => _editPresentation(
-                      existing: presentation,
-                      index: entry.key,
+                  CustomPaint(
+                    foregroundPainter: _ContinuousButtonBorderPainter(
+                      borderRadius: 12,
+                      color: const Color(0xffa9cbbb),
+                      strokeWidth: 1.5,
                     ),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: const Color(0xff0b6f5d),
-                      side: const BorderSide(
-                        color: Color(0xff0b6f5d),
-                        width: 1.5,
+                    child: OutlinedButton(
+                      onPressed: () => _editPresentation(
+                        existing: presentation,
+                        index: entry.key,
                       ),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: const Color(0xff4e8c7d),
+                        side: const BorderSide(
+                          color: Color(0xffa9cbbb),
+                          width: 1.5,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        minimumSize: const Size(48, 48),
                       ),
-                      minimumSize: const Size(48, 48),
+                      child: const Text('Edytuj'),
                     ),
-                    child: const Text('Edytuj'),
                   ),
                   TextButton(
                     key: ValueKey('delete-presentation-${presentation.id}'),
@@ -2173,31 +2487,91 @@ class _AdminPresentationPanelState extends State<AdminPresentationPanel> {
                 icon: const Icon(Icons.add),
                 label: const Text('Dodaj prezentację'),
               );
-              final exportButton = OutlinedButton(
-                key: AdminPresentationPanel.exportCsvKey,
-                onPressed: _presentations.isEmpty ? null : widget.onCsv,
-                style: OutlinedButton.styleFrom(
-                  side: const BorderSide(color: Color(0xff0b6f5d), width: 1.5),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
+              final exportButton = CustomPaint(
+                foregroundPainter: _ContinuousButtonBorderPainter(
+                  borderRadius: 12,
+                  color: const Color(0xffa9cbbb),
+                  strokeWidth: 1.5,
+                ),
+                child: OutlinedButton(
+                  key: AdminPresentationPanel.exportCsvKey,
+                  onPressed: _presentations.isEmpty ? null : widget.onCsv,
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(
+                          color: Color(0xffa9cbbb),
+                      width: 1.5,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    minimumSize: const Size(48, 48),
+                    foregroundColor:
+                        _presentations.isEmpty || widget.onCsv == null
+                        ? const Color(0xff8a9690)
+                        : null,
                   ),
-                  minimumSize: const Size(48, 48),
-                  foregroundColor:
-                      _presentations.isEmpty || widget.onCsv == null
-                      ? const Color(0xff8a9690)
-                      : null,
-                ),
-                child: const Text(
-                  'Eksportuj wyniki do CSV',
-                  textAlign: TextAlign.center,
+                  child: const Text(
+                    'Eksportuj wyniki do CSV',
+                    textAlign: TextAlign.center,
+                  ),
                 ),
               );
-              final resultsButton = FilledButton.tonalIcon(
-                key: const ValueKey('show-results'),
-                onPressed: hasRatings ? widget.onShowResults : null,
-                icon: const Icon(Icons.bar_chart),
-                label: const Text('Pokaż wyniki'),
+              final resultsButton = CustomPaint(
+                foregroundPainter: _ContinuousButtonBorderPainter(
+                  borderRadius: 24,
+                  color: const Color(0xffd3eee5),
+                ),
+                child: FilledButton.tonalIcon(
+                  key: const ValueKey('show-results'),
+                  onPressed: hasRatings ? widget.onShowResults : null,
+                  icon: const Icon(Icons.bar_chart),
+                  label: const Text('Pokaż wyniki'),
+                ),
               );
+              final kioskButton = widget.kioskAvailable
+                  ? CustomPaint(
+                      key: const ValueKey('kiosk-mode-toggle'),
+                      foregroundPainter: const _ContinuousButtonBorderPainter(
+                        borderRadius: 24,
+                        color: Color(0xffa9cbbb),
+                        strokeWidth: 1.4,
+                      ),
+                      child: Material(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(24),
+                        child: InkWell(
+                          onTap: widget.onKioskToggle,
+                          borderRadius: BorderRadius.circular(24),
+                          child: Center(
+                            child: FittedBox(
+                              fit: BoxFit.scaleDown,
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                  widget.kioskEnabled
+                                      ? Icons.lock_open_outlined
+                                      : Icons.lock_outline,
+                                    size: 18,
+                                    color: const Color(0xff0b6f5d),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    widget.kioskEnabled
+                                        ? 'Wyłącz kiosk'
+                                        : 'Włącz kiosk',
+                                    style: const TextStyle(
+                                      color: Color(0xff0b6f5d),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    )
+                  : null;
 
               if (phoneLandscape) {
                 return Row(
@@ -2206,6 +2580,7 @@ class _AdminPresentationPanelState extends State<AdminPresentationPanel> {
                       addButton,
                       exportButton,
                       resultsButton,
+                      ?kioskButton,
                     ])
                       Expanded(
                         child: Padding(
@@ -2233,11 +2608,21 @@ class _AdminPresentationPanelState extends State<AdminPresentationPanel> {
                       SizedBox(height: 56, child: exportButton),
                       const SizedBox(height: 8),
                       SizedBox(height: 56, child: resultsButton),
+                      if (kioskButton != null) ...[
+                        const SizedBox(height: 8),
+                        SizedBox(height: 56, child: kioskButton),
+                      ],
                     ] else
                       SizedBox(
-                        width: 520,
+                        width: kioskButton == null ? 520 : 800,
                         child: Row(
                           children: [
+                            if (kioskButton != null) ...[
+                              Expanded(
+                                child: SizedBox(height: 56, child: kioskButton),
+                              ),
+                              const SizedBox(width: 8),
+                            ],
                             Expanded(
                               child: SizedBox(height: 56, child: resultsButton),
                             ),
@@ -2257,6 +2642,41 @@ class _AdminPresentationPanelState extends State<AdminPresentationPanel> {
       ),
     ),
   );
+}
+
+class _ContinuousButtonBorderPainter extends CustomPainter {
+  const _ContinuousButtonBorderPainter({
+    required this.borderRadius,
+    required this.color,
+    this.strokeWidth = 1,
+  });
+
+  final double borderRadius;
+  final Color color;
+  final double strokeWidth;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = strokeWidth
+      ..isAntiAlias = true;
+    final rect = Offset.zero & size;
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        rect.deflate(strokeWidth / 2),
+        Radius.circular(borderRadius),
+      ),
+      paint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _ContinuousButtonBorderPainter oldDelegate) =>
+      borderRadius != oldDelegate.borderRadius ||
+      color != oldDelegate.color ||
+      strokeWidth != oldDelegate.strokeWidth;
 }
 
 class _RatingCountBadge extends StatelessWidget {
@@ -2393,6 +2813,54 @@ class _AdminPasswordDialog extends StatefulWidget {
 
   @override
   State<_AdminPasswordDialog> createState() => _AdminPasswordDialogState();
+}
+
+class _EmergencyKioskExitDialog extends StatefulWidget {
+  const _EmergencyKioskExitDialog();
+
+  @override
+  State<_EmergencyKioskExitDialog> createState() =>
+      _EmergencyKioskExitDialogState();
+}
+
+class _EmergencyKioskExitDialogState extends State<_EmergencyKioskExitDialog> {
+  final _controller = TextEditingController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    key: const ValueKey('emergency-kiosk-exit-dialog'),
+    title: const Text('Awaryjne wyjście z kiosku'),
+    content: TextField(
+      key: const ValueKey('emergency-kiosk-password-input'),
+      controller: _controller,
+      autofocus: false,
+      obscureText: true,
+      keyboardType: TextInputType.visiblePassword,
+      textInputAction: TextInputAction.done,
+      onSubmitted: (value) => Navigator.pop(context, value),
+      decoration: const InputDecoration(
+        labelText: 'Hasło organizatora',
+        border: OutlineInputBorder(),
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.pop(context),
+        child: const Text('Anuluj'),
+      ),
+      FilledButton(
+        key: const ValueKey('emergency-kiosk-exit-confirm'),
+        onPressed: () => Navigator.pop(context, _controller.text),
+        child: const Text('Wyłącz kiosk'),
+      ),
+    ],
+  );
 }
 
 class _AdminPasswordDialogState extends State<_AdminPasswordDialog> {

@@ -1,11 +1,50 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'package:feedback_app/main.dart';
 
 import 'test_fakes.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+  const kioskChannel = MethodChannel('com.feedbackapp.feedback_app/kiosk');
+  var deviceOwner = false;
+  var screenPinningActive = false;
+  var lockTaskActive = false;
+  final messenger = TestDefaultBinaryMessengerBinding
+      .instance
+      .defaultBinaryMessenger;
+  final shakeEvents = StreamController<dynamic>.broadcast();
+  messenger.setMockMethodCallHandler(kioskChannel, (call) async {
+        switch (call.method) {
+          case 'isDeviceOwner':
+            return deviceOwner;
+          case 'isLockTaskActive':
+            return lockTaskActive;
+          case 'isScreenPinningActive':
+            return screenPinningActive;
+          case 'enableLockTask':
+            if (!deviceOwner) return false;
+            lockTaskActive = true;
+            return true;
+          case 'disableLockTask':
+            if (!lockTaskActive) return false;
+            lockTaskActive = false;
+            return true;
+          default:
+            return null;
+        }
+      });
+  setUp(() {
+    deviceOwner = false;
+    screenPinningActive = false;
+    lockTaskActive = false;
+    kioskShakeEventsOverride = null;
+  });
+
   testWidgets('renders loading state before configuration loads', (
     tester,
   ) async {
@@ -114,7 +153,7 @@ void main() {
       find.widgetWithText(OutlinedButton, 'Wróć'),
     );
     final side = back.style!.side!.resolve({})!;
-    expect(side.color, const Color(0xff0b6f5d));
+    expect(side.color, const Color(0xffa9cbbb));
     expect(side.width, 1.5);
     expect(tester.takeException(), isNull);
   });
@@ -169,6 +208,330 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Panel organizatora'), findsOneWidget);
     expect(find.text('Prezentacje'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('device owner can enable and disable Android kiosk mode', (
+    tester,
+  ) async {
+    deviceOwner = true;
+    final repository = MemoryFeedbackRepository(
+      presentations: testEventConfig.presentations,
+      activeIds: const ['asset-talk-1'],
+    );
+    await tester.pumpWidget(
+      FeedbackApp(repository: repository, initialConfig: testEventConfig),
+    );
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 100)),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('rating-options-menu')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('open-admin-panel')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('admin-password-input')),
+      'kochamjug',
+    );
+    await tester.tap(find.text('Odblokuj'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Włącz kiosk'), findsOneWidget);
+    await tester.ensureVisible(find.byKey(const ValueKey('kiosk-mode-toggle')));
+    await tester.tap(find.byKey(const ValueKey('kiosk-mode-toggle')));
+    await tester.pump();
+    expect(find.text('Tryb kiosku włączony.'), findsOneWidget);
+    await tester.pumpAndSettle();
+    expect(lockTaskActive, isTrue);
+    expect(find.text('Tryb kiosku włączony.'), findsOneWidget);
+    expect(find.text('Wyłącz kiosk'), findsOneWidget);
+
+    await tester.tap(find.byKey(const ValueKey('kiosk-mode-toggle')));
+    await tester.pump();
+    expect(find.text('Tryb kiosku wyłączony.'), findsOneWidget);
+    await tester.pumpAndSettle();
+    expect(lockTaskActive, isFalse);
+    expect(find.text('Włącz kiosk'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('failed kiosk enable restores off state and reports failure', (
+    tester,
+  ) async {
+    deviceOwner = true;
+    final repository = MemoryFeedbackRepository();
+    await tester.pumpWidget(
+      FeedbackApp(repository: repository, initialConfig: testEventConfig),
+    );
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 100)),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Panel organizatora'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('admin-password-input')),
+      'kochamjug',
+    );
+    await tester.tap(find.text('Odblokuj'));
+    await tester.pumpAndSettle();
+
+    lockTaskActive = false;
+    kioskEnableOverride = () async => false;
+    await tester.tap(find.byKey(const ValueKey('kiosk-mode-toggle')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Włącz kiosk'), findsOneWidget);
+    expect(find.text('Nie można włączyć kiosku. To urządzenie musi być skonfigurowane jako Device Owner.'), findsOneWidget);
+    expect(lockTaskActive, isFalse);
+    expect(tester.takeException(), isNull);
+    kioskEnableOverride = null;
+  });
+
+  testWidgets('failed kiosk disable restores active state and reports failure', (
+    tester,
+  ) async {
+    enableKioskShakeEventsForTesting = true;
+    kioskShakeEventsOverride = shakeEvents.stream;
+    addTearDown(() {
+      enableKioskShakeEventsForTesting = false;
+      kioskShakeEventsOverride = null;
+    });
+    deviceOwner = true;
+    lockTaskActive = true;
+    final repository = MemoryFeedbackRepository();
+    await tester.pumpWidget(
+      FeedbackApp(repository: repository, initialConfig: testEventConfig),
+    );
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 100)),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Panel organizatora'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('admin-password-input')),
+      'kochamjug',
+    );
+    await tester.tap(find.text('Odblokuj'));
+    await tester.pumpAndSettle();
+
+    kioskDisableOverride = () async => false;
+    await tester.tap(find.byKey(const ValueKey('kiosk-mode-toggle')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Wyłącz kiosk'), findsOneWidget);
+    expect(find.text('Nie można wyłączyć trybu kiosku.'), findsOneWidget);
+    expect(lockTaskActive, isTrue);
+    expect(tester.takeException(), isNull);
+    kioskDisableOverride = null;
+  });
+
+  testWidgets('non-device-owner cannot enable Lock Task from kiosk toggle', (
+    tester,
+  ) async {
+    deviceOwner = false;
+    final repository = MemoryFeedbackRepository();
+    await tester.pumpWidget(
+      FeedbackApp(repository: repository, initialConfig: testEventConfig),
+    );
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 100)),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Panel organizatora'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('admin-password-input')),
+      'kochamjug',
+    );
+    await tester.tap(find.text('Odblokuj'));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('kiosk-mode-toggle')), findsNothing);
+    expect(find.text('Przypnij ekran'), findsNothing);
+    expect(lockTaskActive, isFalse);
+  });
+
+  testWidgets('kiosk action asks to unpin Android screen first', (
+    tester,
+  ) async {
+    deviceOwner = true;
+    screenPinningActive = true;
+    final repository = MemoryFeedbackRepository();
+    await tester.pumpWidget(
+      FeedbackApp(repository: repository, initialConfig: testEventConfig),
+    );
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 100)),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Panel organizatora'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('admin-password-input')),
+      'kochamjug',
+    );
+    await tester.tap(find.text('Odblokuj'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('kiosk-mode-toggle')));
+    await tester.pump();
+    expect(
+      find.text(
+        'Najpierw odepnij przypięty ekran gestem Androida, potem włącz kiosk.',
+      ),
+      findsOneWidget,
+    );
+    expect(lockTaskActive, isFalse);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('shake opens password-protected emergency kiosk exit', (
+    tester,
+  ) async {
+    enableKioskShakeEventsForTesting = true;
+    addTearDown(() => enableKioskShakeEventsForTesting = false);
+    kioskShakeEventsOverride = shakeEvents.stream;
+    addTearDown(() => kioskShakeEventsOverride = null);
+    deviceOwner = true;
+    lockTaskActive = true;
+    var allowEmergencyDisable = false;
+    kioskDeviceOwnerOverride = () async => true;
+    kioskActiveOverride = () async => true;
+    kioskDisableOverride = () async {
+      if (!allowEmergencyDisable) return false;
+      lockTaskActive = false;
+      return true;
+    };
+    addTearDown(() {
+      kioskDeviceOwnerOverride = null;
+      kioskActiveOverride = null;
+      kioskDisableOverride = null;
+    });
+    final repository = MemoryFeedbackRepository();
+    await tester.pumpWidget(
+      FeedbackApp(repository: repository, initialConfig: testEventConfig),
+    );
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 100)),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Panel organizatora'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('admin-password-input')),
+      'kochamjug',
+    );
+    await tester.tap(find.text('Odblokuj'));
+    await tester.pumpAndSettle();
+    expect(find.text('Wyłącz kiosk'), findsOneWidget);
+
+    shakeEvents.add(DateTime.now().millisecondsSinceEpoch);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('emergency-kiosk-exit-dialog')), findsOneWidget);
+    await tester.tap(find.text('Anuluj'));
+    await tester.pumpAndSettle();
+    expect(lockTaskActive, isTrue);
+    expect(find.byKey(const ValueKey('emergency-kiosk-exit-dialog')), findsNothing);
+
+    shakeEvents.add(DateTime.now().millisecondsSinceEpoch);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('emergency-kiosk-exit-dialog')), findsOneWidget);
+    await tester.enterText(
+      find.byKey(const ValueKey('emergency-kiosk-password-input')),
+      'wrong-password',
+    );
+    await tester.tap(find.byKey(const ValueKey('emergency-kiosk-exit-confirm')));
+    await tester.pumpAndSettle();
+    expect(lockTaskActive, isTrue);
+    expect(find.text('Nieprawidłowe hasło organizatora.'), findsOneWidget);
+
+    shakeEvents.add(DateTime.now().millisecondsSinceEpoch);
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('emergency-kiosk-password-input')),
+      'kochamjug',
+    );
+    await tester.tap(find.byKey(const ValueKey('emergency-kiosk-exit-confirm')));
+    await tester.pumpAndSettle();
+    expect(lockTaskActive, isTrue);
+    expect(find.text('Nie można wyłączyć trybu kiosku.'), findsOneWidget);
+
+    allowEmergencyDisable = true;
+    shakeEvents.add(DateTime.now().millisecondsSinceEpoch);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('emergency-kiosk-exit-dialog')), findsOneWidget);
+    await tester.enterText(
+      find.byKey(const ValueKey('emergency-kiosk-password-input')),
+      'kochamjug',
+    );
+    await tester.tap(find.byKey(const ValueKey('emergency-kiosk-exit-confirm')));
+    await tester.pumpAndSettle();
+    expect(lockTaskActive, isFalse);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('shake cannot open emergency exit when kiosk is inactive', (
+    tester,
+  ) async {
+    enableKioskShakeEventsForTesting = true;
+    addTearDown(() => enableKioskShakeEventsForTesting = false);
+    kioskShakeEventsOverride = shakeEvents.stream;
+    addTearDown(() => kioskShakeEventsOverride = null);
+    deviceOwner = true;
+    lockTaskActive = false;
+    final repository = MemoryFeedbackRepository();
+    await tester.pumpWidget(
+      FeedbackApp(repository: repository, initialConfig: testEventConfig),
+    );
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 100)),
+    );
+    await tester.pumpAndSettle();
+
+    shakeEvents.add(DateTime.now().millisecondsSinceEpoch);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('emergency-kiosk-exit-dialog')), findsNothing);
+    expect(lockTaskActive, isFalse);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('organizer enables and disables lock task from admin panel', (
+    tester,
+  ) async {
+    deviceOwner = true;
+    final repository = MemoryFeedbackRepository();
+    await tester.pumpWidget(
+      FeedbackApp(repository: repository, initialConfig: testEventConfig),
+    );
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 100)),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Panel organizatora'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('admin-password-input')),
+      'kochamjug',
+    );
+    await tester.tap(find.text('Odblokuj'));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('kiosk-mode-toggle')), findsOneWidget);
+    await tester.ensureVisible(find.byKey(const ValueKey('kiosk-mode-toggle')));
+    await tester.tap(find.byKey(const ValueKey('kiosk-mode-toggle')));
+    await tester.pumpAndSettle();
+    expect(lockTaskActive, isTrue);
+    expect(find.text('Wyłącz kiosk'), findsOneWidget);
+
+    await tester.ensureVisible(find.byKey(const ValueKey('kiosk-mode-toggle')));
+    await tester.tap(find.byKey(const ValueKey('kiosk-mode-toggle')));
+    await tester.pumpAndSettle();
+    expect(lockTaskActive, isFalse);
+    expect(find.text('Włącz kiosk'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -481,12 +844,13 @@ void main() {
 
 Rating? _selectedRating(WidgetTester tester) {
   for (final rating in Rating.values) {
-    final button = tester.widget<OutlinedButton>(
-      find.byKey(ValueKey('rating-${rating.code}-asset-talk-1')),
+    final buttonMaterial = tester.widget<Material>(
+      find.descendant(
+        of: find.byKey(ValueKey('rating-${rating.code}-asset-talk-1')),
+        matching: find.byType(Material),
+      ),
     );
-    if (button.style?.backgroundColor?.resolve({}) != Colors.white) {
-      return rating;
-    }
+    if (buttonMaterial.color != Colors.white) return rating;
   }
   return null;
 }

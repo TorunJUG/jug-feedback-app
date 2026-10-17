@@ -10,6 +10,8 @@ class MemoryFeedbackRepository implements FeedbackRepository {
     this.clearRatingsError,
     this.savePresentationsError,
     this.saveActiveIdsError,
+    this.deviceOwner = false,
+    this.lockTaskActive = false,
   }) : presentations = [...presentations],
        activeIds = [...activeIds],
        rounds = [...rounds];
@@ -22,6 +24,8 @@ class MemoryFeedbackRepository implements FeedbackRepository {
   Object? clearRatingsError;
   Object? savePresentationsError;
   Object? saveActiveIdsError;
+  bool deviceOwner;
+  bool lockTaskActive;
 
   @override
   Future<List<FeedbackRound>> loadRounds() async {

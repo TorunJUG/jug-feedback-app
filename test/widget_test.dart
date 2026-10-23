@@ -17,7 +17,6 @@ void main() {
   final messenger = TestDefaultBinaryMessengerBinding
       .instance
       .defaultBinaryMessenger;
-  final shakeEvents = StreamController<dynamic>.broadcast();
   messenger.setMockMethodCallHandler(kioskChannel, (call) async {
         switch (call.method) {
           case 'isDeviceOwner':
@@ -293,13 +292,15 @@ void main() {
     tester,
   ) async {
     enableKioskShakeEventsForTesting = true;
-    kioskShakeEventsOverride = shakeEvents.stream;
+    final failedDisableShakeEvents = StreamController<dynamic>.broadcast();
     addTearDown(() {
       enableKioskShakeEventsForTesting = false;
       kioskShakeEventsOverride = null;
+      failedDisableShakeEvents.close();
     });
     deviceOwner = true;
     lockTaskActive = true;
+    kioskShakeEventsOverride = failedDisableShakeEvents.stream;
     final repository = MemoryFeedbackRepository();
     await tester.pumpWidget(
       FeedbackApp(repository: repository, initialConfig: testEventConfig),
@@ -393,8 +394,12 @@ void main() {
   ) async {
     enableKioskShakeEventsForTesting = true;
     addTearDown(() => enableKioskShakeEventsForTesting = false);
-    kioskShakeEventsOverride = shakeEvents.stream;
-    addTearDown(() => kioskShakeEventsOverride = null);
+    final emergencyShakeEvents = StreamController<dynamic>.broadcast();
+    kioskShakeEventsOverride = emergencyShakeEvents.stream;
+    addTearDown(() {
+      kioskShakeEventsOverride = null;
+      emergencyShakeEvents.close();
+    });
     deviceOwner = true;
     lockTaskActive = true;
     var allowEmergencyDisable = false;
@@ -429,7 +434,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Wyłącz kiosk'), findsOneWidget);
 
-    shakeEvents.add(DateTime.now().millisecondsSinceEpoch);
+    emergencyShakeEvents.add(DateTime.now().millisecondsSinceEpoch);
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('emergency-kiosk-exit-dialog')), findsOneWidget);
     await tester.tap(find.text('Anuluj'));
@@ -437,7 +442,7 @@ void main() {
     expect(lockTaskActive, isTrue);
     expect(find.byKey(const ValueKey('emergency-kiosk-exit-dialog')), findsNothing);
 
-    shakeEvents.add(DateTime.now().millisecondsSinceEpoch);
+    emergencyShakeEvents.add(DateTime.now().millisecondsSinceEpoch);
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('emergency-kiosk-exit-dialog')), findsOneWidget);
     await tester.enterText(
@@ -449,7 +454,7 @@ void main() {
     expect(lockTaskActive, isTrue);
     expect(find.text('Nieprawidłowe hasło organizatora.'), findsOneWidget);
 
-    shakeEvents.add(DateTime.now().millisecondsSinceEpoch);
+    emergencyShakeEvents.add(DateTime.now().millisecondsSinceEpoch);
     await tester.pumpAndSettle();
     await tester.enterText(
       find.byKey(const ValueKey('emergency-kiosk-password-input')),
@@ -461,7 +466,7 @@ void main() {
     expect(find.text('Nie można wyłączyć trybu kiosku.'), findsOneWidget);
 
     allowEmergencyDisable = true;
-    shakeEvents.add(DateTime.now().millisecondsSinceEpoch);
+    emergencyShakeEvents.add(DateTime.now().millisecondsSinceEpoch);
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('emergency-kiosk-exit-dialog')), findsOneWidget);
     await tester.enterText(
@@ -479,8 +484,12 @@ void main() {
   ) async {
     enableKioskShakeEventsForTesting = true;
     addTearDown(() => enableKioskShakeEventsForTesting = false);
-    kioskShakeEventsOverride = shakeEvents.stream;
-    addTearDown(() => kioskShakeEventsOverride = null);
+    final inactiveShakeEvents = StreamController<dynamic>.broadcast();
+    kioskShakeEventsOverride = inactiveShakeEvents.stream;
+    addTearDown(() {
+      kioskShakeEventsOverride = null;
+      inactiveShakeEvents.close();
+    });
     deviceOwner = true;
     lockTaskActive = false;
     final repository = MemoryFeedbackRepository();
@@ -492,7 +501,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    shakeEvents.add(DateTime.now().millisecondsSinceEpoch);
+    inactiveShakeEvents.add(DateTime.now().millisecondsSinceEpoch);
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('emergency-kiosk-exit-dialog')), findsNothing);
     expect(lockTaskActive, isFalse);
@@ -540,6 +549,7 @@ void main() {
   ) async {
     final repository = MemoryFeedbackRepository(
       presentations: testEventConfig.presentations,
+      activeIds: const ['asset-talk-2'],
       rounds: [
         FeedbackRound(
           id: 'round-1',
@@ -563,7 +573,9 @@ void main() {
       () => Future<void>.delayed(const Duration(milliseconds: 100)),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Panel organizatora'));
+    await tester.tap(find.byKey(const ValueKey('rating-options-menu')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('open-admin-panel')));
     await tester.pumpAndSettle();
     await tester.enterText(
       find.byKey(const ValueKey('admin-password-input')),
@@ -585,6 +597,7 @@ void main() {
     expect(repository.presentations.map((presentation) => presentation.id), [
       'asset-talk-1',
     ]);
+    expect(repository.activeIds, isEmpty);
     expect(repository.rounds, hasLength(2));
     expect(repository.rounds[0].ratings, {'asset-talk-1': Rating.good});
     expect(repository.rounds[1].ratings, {'asset-talk-1': Rating.neutral});

@@ -34,6 +34,8 @@ dependencies:
   path_provider: ^2.1.5
   share_plus: ^12.0.1
   shared_preferences: ^2.5.3
+  # Keep pre-JNI Android implementation for compatibility with API 27 devices.
+  shared_preferences_android: 2.4.25
 
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.

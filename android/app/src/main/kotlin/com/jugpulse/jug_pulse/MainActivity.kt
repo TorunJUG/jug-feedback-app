@@ -24,6 +24,16 @@ class MainActivity : FlutterActivity(), SensorEventListener {
 
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
         super.onCreate(savedInstanceState)
+        keepScreenAwake()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        keepScreenAwake()
+        updateShakeDetection()
+    }
+
+    private fun keepScreenAwake() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     }
 
@@ -52,11 +62,6 @@ class MainActivity : FlutterActivity(), SensorEventListener {
                     stopShakeDetection()
                 }
             })
-    }
-
-    override fun onResume() {
-        super.onResume()
-        updateShakeDetection()
     }
 
     override fun onPause() {

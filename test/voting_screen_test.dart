@@ -120,6 +120,14 @@ void main() {
           final speakerRect = tester.getRect(find.text('Speaker one'));
           expect(speakerRect.top, greaterThanOrEqualTo(infoRect.top));
           expect(speakerRect.bottom, lessThanOrEqualTo(infoRect.bottom));
+          expect(
+            speakerRect.top - infoRect.top,
+            greaterThanOrEqualTo(16),
+          );
+          expect(
+            infoRect.bottom - speakerRect.bottom,
+            greaterThanOrEqualTo(16),
+          );
           expect(infoRect.bottom, lessThanOrEqualTo(ratingGridRect.top));
           expect(
             find.text('Wybierz ocenę. Możesz ją zmienić przed zatwierdzeniem.'),

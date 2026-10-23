@@ -472,11 +472,9 @@ class _FeedbackHomeState extends State<FeedbackHome> {
 
   void _startKioskShakeListener() {
     if (_kioskShakeSubscription != null) return;
-    if (kioskShakeEventsOverride case final stream?) {
-      _kioskShakeSubscription = stream.listen(
-        (_) => _handleKioskShake(),
-        onError: (_) {},
-      );
+    final stream = kioskShakeEventsOverride;
+    if (stream != null) {
+      _kioskShakeSubscription = stream.listen((_) => _handleKioskShake());
     } else if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
       _kioskShakeSubscription = _kioskShakeChannel.receiveBroadcastStream().listen(
         (_) => _handleKioskShake(),
@@ -763,13 +761,15 @@ class _FeedbackHomeState extends State<FeedbackHome> {
   ) async {
     await _repository.clearRatingsForPresentation(presentationId);
     await _repository.savePresentations(presentations);
+    final activePresentationIds = _activePresentationIds
+        .where((id) => id != presentationId)
+        .toList();
+    await _repository.saveActivePresentationIds(activePresentationIds);
     final rounds = await _repository.loadRounds();
     if (!mounted) return;
     setState(() {
       _presentations = presentations;
-      _activePresentationIds = _activePresentationIds
-          .where((id) => id != presentationId)
-          .toList();
+      _activePresentationIds = activePresentationIds;
       _rounds = rounds;
       _draft.remove(presentationId);
     });
@@ -1304,8 +1304,8 @@ class _LandscapeVotingLayout extends StatelessWidget {
               Container(
                 key: const ValueKey('landscape-presentation-info'),
                 padding: EdgeInsets.symmetric(
-                  horizontal: 14,
-                  vertical: tight ? 6 : 9,
+                  horizontal: 18,
+                  vertical: 16,
                 ),
                 decoration: BoxDecoration(
                   color: Colors.white,
